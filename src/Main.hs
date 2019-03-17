@@ -4,13 +4,14 @@ module Main where
 import Turtle
 import Prelude hiding (FilePath)
 import qualified Control.Foldl as Fold
-import Data.Maybe (listToMaybe, isJust)
+import Data.Maybe (listToMaybe, isJust, fromJust)
 import Data.Either (lefts)
+import Debug.Trace
 import qualified Data.Text as T
 
 data Module = Module
   { moduleManifest :: FilePath
-  , moduleRootPath :: FilePath
+  , moduleSrcMainPath :: FilePath
   , modulePackage :: Maybe Text
   , moduleName :: Text
   }
@@ -45,14 +46,32 @@ findModules dir = do
 validateModule :: Module -> IO (Either Text Module)
 validateModule m = do
   manifestExists <- testfile (moduleManifest m)
-  rootPathExists <- testdir (moduleRootPath m)
+  rootPathExists <- testdir (moduleSrcMainPath m)
   let hasPackage = isJust (modulePackage m)
   let name = moduleName m
   return (
     boolToEither manifestExists ("Module:  " <> name <> ". No manifest found") m >>
-      boolToEither rootPathExists ("Module:  " <> name <> ". root path does not exist, expected 'src/kotlin'") m >>
+      boolToEither rootPathExists ("Module:  " <> name <> ". source path does not exist, expected 'src/kotlin'") m >>
       boolToEither hasPackage ("Module:  " <> name <> ". Package not found") m
     )
+
+findKotlinFiles :: FilePath -> Shell FilePath
+findKotlinFiles = find (ends ".kt")
+
+testM = Module {moduleManifest = "/home/dima/projects/tbi-android/lib-preferences/src/main/AndroidManifest.xml", moduleSrcMainPath = "/home/dima/projects/tbi-android/lib-preferences/src/main/kotlin", modulePackage = Just "ru.appkode.base.lib.preferences", moduleName = "lib-preferences"}
+
+toPackageName :: Text -> Text
+toPackageName = T.map (\c -> if c == '/' then '.' else c)
+
+derivePackageName :: Module -> FilePath -> Text
+derivePackageName m fp = let
+  -- no easy way to append '/' in the end, have to do this dance...
+  srcMainPath = decodeString (encodeString (moduleSrcMainPath m) <> "/")
+  relativeDir = directory . fromJust $ stripPrefix srcMainPath fp
+  rdirname = T.dropWhileEnd (\c -> c == '/' || c == '.') $ T.pack $ encodeString relativeDir
+  relativePackageName = toPackageName rdirname
+  basePackage = fromJust $ modulePackage m
+  in if T.null relativePackageName then basePackage else basePackage <> "." <> relativePackageName
 
 boolToEither :: Bool -> a -> b -> Either a b
 boolToEither test left right = if test then Right right else Left left
@@ -64,6 +83,8 @@ printErrorList errs = do
 
 main :: IO ()
 main = do
-  modules <- findModules "../tbi-android"
+  workDir <- pwd
+  modules <- findModules $ collapse (workDir <> "../tbi-android")
+  print $ head modules
   validationErrors <- lefts <$> traverse validateModule modules
   unless (null validationErrors) (printErrorList validationErrors)
