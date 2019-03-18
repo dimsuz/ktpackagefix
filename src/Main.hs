@@ -83,6 +83,9 @@ extractPackageFromKt file = do
 toPackageName :: Text -> Text
 toPackageName = T.map (\c -> if c == '/' then '.' else c)
 
+packageToFileName :: Text -> FilePath
+packageToFileName t = decodeString $ T.unpack $ T.map (\c -> if c == '.' then '/' else c) t
+
 stripModulePrefix :: Module -> FilePath -> Text
 stripModulePrefix m fp = let
   -- no easy way to append '/' in the end, have to do this dance...
@@ -96,6 +99,16 @@ derivePackageName m fp = let
   relativePackageName = toPackageName rdirname
   basePackage = fromJust $ modulePackage m
   in if T.null relativePackageName then basePackage else basePackage <> "." <> relativePackageName
+
+repackageSourceFiles :: Module -> IO ()
+repackageSourceFiles m = do
+  topLevelFiles <- fold (ls (moduleSrcMainPath m)) Fold.list
+  mapM_ (\f -> do
+            let relativeFileName = decodeString $ T.unpack $ stripModulePrefix m f
+            let targetFile = collapse (moduleSrcMainPath m </> (packageToFileName (fromJust $ modulePackage m)) </> relativeFileName)
+            mktree $ directory targetFile
+            mv f targetFile
+        ) topLevelFiles
 
 boolToEither :: Bool -> a -> b -> Either a b
 boolToEither test left right = if test then Right right else Left left
@@ -114,5 +127,10 @@ main = do
   let validationErrors = lefts validatedModules
   let validModules = rights validatedModules
   packageValidationErrors <- lefts <$> traverse validateKotlinPackages validModules
-  unless (null validationErrors) (printErrorList "Found errors, some modules will be skipped: "validationErrors)
-  if (null packageValidationErrors) then putStrLn "\nPackage validation: OK" else (printErrorList "Package errors: " packageValidationErrors)
+  unless (null validationErrors) (printErrorList "Found errors, some modules will be skipped: " validationErrors)
+  if (null packageValidationErrors)
+    then do
+    putStrLn "\nPackage validation: OK"
+    mapM_ repackageSourceFiles validModules
+    else
+    (printErrorList "Package errors: " packageValidationErrors)
