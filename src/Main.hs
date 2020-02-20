@@ -122,7 +122,7 @@ printErrorList title errs = do
 main :: IO ()
 main = do
   workDir <- pwd
-  modules <- findModules $ collapse (workDir <> "../base-project")
+  modules <- findModules $ collapse workDir
   validatedModules <- traverse validateModule modules
   let validationErrors = lefts validatedModules
   let validModules = rights validatedModules
