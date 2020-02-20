@@ -16,6 +16,8 @@ extra-source-files:  README.md
 executable ktpackagefix
   hs-source-dirs:      src
   main-is:             Main.hs
+  other-modules:       ViewBindingMigration
+                     , KtPackageMigration
   default-language:    Haskell2010
   build-depends:       base >= 4.7 && < 5
                      , turtle
