@@ -25,6 +25,14 @@ data Module = Module
   }
   deriving Show
 
+data Controller = Controller
+  { controllerName :: Text
+  , controllerFilePath :: FilePath
+  , controllerBindingName :: FilePath
+  , controllerChildViewIds :: [Text]
+  }
+  deriving Show
+
 extractModuleName :: FilePath -> Text
 extractModuleName manifest = T.pack $ encodeString $ dirname $ parent $ parent $ directory manifest
 
@@ -49,5 +57,13 @@ findModules dir = do
   where
     manifests = findtree (invert (has "build")) (find (ends "src/main/AndroidManifest.xml") dir)
 
+findControllers :: Module -> IO [Controller]
+findControllers _ = return []
+
 refactorToViewBinding :: IO ()
-refactorToViewBinding = error "todo"
+refactorToViewBinding = do
+  -- workDir <- pwd
+  let workDir = "../casino-android"
+  modules <- findModules $ collapse workDir
+  controllers <- join <$> mapM findControllers modules
+  print controllers
