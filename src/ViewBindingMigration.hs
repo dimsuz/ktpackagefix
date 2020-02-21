@@ -3,7 +3,8 @@ module ViewBindingMigration where
 
 import Turtle hiding (fp)
 import Prelude hiding (FilePath)
-import Data.Maybe (listToMaybe, isJust)
+import Data.Maybe (listToMaybe, isJust, fromJust)
+import Control.Monad (filterM)
 import qualified Control.Foldl as Fold
 import qualified Data.Text as T
 
@@ -20,6 +21,7 @@ import qualified Data.Text as T
 data Module = Module
   { moduleManifest :: FilePath
   , moduleSrcMainPath :: FilePath
+  , moduleDir :: FilePath
   , modulePackage :: Maybe Text
   , moduleName :: Text
   }
@@ -28,13 +30,16 @@ data Module = Module
 data Controller = Controller
   { controllerName :: Text
   , controllerFilePath :: FilePath
-  , controllerBindingName :: FilePath
+  , controllerBindingName :: Text
   , controllerChildViewIds :: [Text]
   }
   deriving Show
 
 extractModuleName :: FilePath -> Text
-extractModuleName manifest = T.pack $ encodeString $ dirname $ parent $ parent $ directory manifest
+extractModuleName = T.pack . encodeString . dirname . extractModuleDir
+
+extractModuleDir :: FilePath -> FilePath
+extractModuleDir = parent . parent . directory
 
 extractRootPath :: FilePath -> FilePath
 extractRootPath manifest = directory manifest </> "kotlin"
@@ -48,7 +53,7 @@ extractPackage manifest = do
 buildModule :: FilePath -> IO Module
 buildModule mf = do
   package <- extractPackage mf
-  return (Module mf (extractRootPath mf) package (extractModuleName mf))
+  return (Module mf (extractRootPath mf) (extractModuleDir mf) package (extractModuleName mf))
 
 findModules :: FilePath -> IO [Module]
 findModules dir = do
@@ -57,13 +62,54 @@ findModules dir = do
   where
     manifests = findtree (invert (has "build")) (find (ends "src/main/AndroidManifest.xml") dir)
 
+isScopedController :: FilePath -> IO Bool
+isScopedController file = not . null <$> fold lines Fold.list
+  where lines = grep (has "ScopedMviControllerOld<") (input file)
+
+extractControllerName :: FilePath -> IO (Maybe Text)
+extractControllerName file = do
+  let matches = listToMaybe . match packagePattern . lineToText <$> input file
+  join <$> fold matches (Fold.find isJust)
+  where packagePattern = has ("class " *> chars1 <* "Controller :")
+
+extractLayoutResource :: FilePath -> IO (Maybe Text)
+extractLayoutResource file = do
+  let matches = listToMaybe . match packagePattern . lineToText <$> input file
+  join <$> fold matches (Fold.find isJust)
+  where packagePattern = has ("viewLayoutResource = R.layout." *> chars1)
+
+snakeToPascal :: Text -> Text
+snakeToPascal s = T.concat (map T.toTitle parts)
+  where parts = T.splitOn "_" s
+
+extractBindingName :: FilePath -> IO (Maybe Text)
+extractBindingName file = do
+  resource <- extractLayoutResource file
+  return ((<> "Binding") . snakeToPascal <$> resource)
+
+buildController :: FilePath -> IO Controller
+buildController file = do
+  name <- fromJust <$> extractControllerName file
+  bindingName <- fromJust <$> extractBindingName file
+  return Controller
+    { controllerName = name
+    , controllerFilePath = file
+    , controllerBindingName = bindingName
+    , controllerChildViewIds = []
+    }
+
 findControllers :: Module -> IO [Controller]
-findControllers _ = return []
+findControllers m = do
+  files <- fold controllers Fold.list
+  scopedControllers <- filterM isScopedController files
+  mapM buildController scopedControllers
+  where
+    controllers = find (ends "Controller.kt") (moduleDir m)
 
 refactorToViewBinding :: IO ()
 refactorToViewBinding = do
   -- workDir <- pwd
-  let workDir = "../casino-android"
-  modules <- findModules $ collapse workDir
+  let workDir = "../casino-android/casino-ui-profile"
+  modules <- findModules (collapse workDir)
   controllers <- join <$> mapM findControllers modules
   print controllers
