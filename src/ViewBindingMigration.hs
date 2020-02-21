@@ -4,6 +4,7 @@ module ViewBindingMigration where
 import Turtle hiding (fp)
 import Prelude hiding (FilePath)
 import Data.Maybe (listToMaybe, isJust)
+import Control.Monad (filterM)
 import qualified Control.Foldl as Fold
 import qualified Data.Text as T
 
@@ -20,6 +21,7 @@ import qualified Data.Text as T
 data Module = Module
   { moduleManifest :: FilePath
   , moduleSrcMainPath :: FilePath
+  , moduleDir :: FilePath
   , modulePackage :: Maybe Text
   , moduleName :: Text
   }
@@ -36,6 +38,9 @@ data Controller = Controller
 extractModuleName :: FilePath -> Text
 extractModuleName manifest = T.pack $ encodeString $ dirname $ parent $ parent $ directory manifest
 
+extractModuleDir :: FilePath -> FilePath
+extractModuleDir manifest = parent $ parent $ directory manifest
+
 extractRootPath :: FilePath -> FilePath
 extractRootPath manifest = directory manifest </> "kotlin"
 
@@ -48,7 +53,7 @@ extractPackage manifest = do
 buildModule :: FilePath -> IO Module
 buildModule mf = do
   package <- extractPackage mf
-  return (Module mf (extractRootPath mf) package (extractModuleName mf))
+  return (Module mf (extractRootPath mf) (extractModuleDir mf) package (extractModuleName mf))
 
 findModules :: FilePath -> IO [Module]
 findModules dir = do
@@ -57,13 +62,33 @@ findModules dir = do
   where
     manifests = findtree (invert (has "build")) (find (ends "src/main/AndroidManifest.xml") dir)
 
+isScopedController :: FilePath -> IO Bool
+isScopedController file = not . null <$> fold lines Fold.list
+  where lines = grep (has "ScopedMviControllerOld<") (input file)
+
+extractControllerName :: FilePath -> IO (Maybe)
+
+buildController :: FilePath -> IO Controller
+buildController file = do
+  return Controller
+    { controllerName = "hello"
+    , controllerFilePath = file
+    , controllerBindingName = file
+    , controllerChildViewIds = []
+    }
+
 findControllers :: Module -> IO [Controller]
-findControllers _ = return []
+findControllers m = do
+  files <- fold controllers Fold.list
+  scopedControllers <- filterM isScopedController files
+  mapM buildController scopedControllers
+  where
+    controllers = find (ends "Controller.kt") (moduleDir m)
 
 refactorToViewBinding :: IO ()
 refactorToViewBinding = do
   -- workDir <- pwd
-  let workDir = "../casino-android"
-  modules <- findModules $ collapse workDir
+  let workDir = "../casino-android/casino-ui-profile"
+  modules <- findModules (collapse workDir)
   controllers <- join <$> mapM findControllers modules
   print controllers
