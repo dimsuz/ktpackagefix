@@ -66,7 +66,15 @@ isScopedController :: FilePath -> IO Bool
 isScopedController file = not . null <$> fold lines Fold.list
   where lines = grep (has "ScopedMviControllerOld<") (input file)
 
-extractControllerName :: FilePath -> IO (Maybe)
+extractControllerName :: FilePath -> IO Text
+extractControllerName _ = error "TODO"
+
+findChildViewIds :: Module -> Text -> IO [Text]
+findChildViewIds m layoutRes = do
+  let filename = moduleDir m </> "src" </> "main" </> "res" </> "layout" </> fromText layoutRes <.> "xml"
+  let matches = match viewIdPattern . lineToText <$> input filename
+  join <$> fold matches Fold.list
+  where viewIdPattern = has (("android:id=\"@+id/" <|> "android:id=\"@id/") *> chars1 <* char '"')
 
 buildController :: FilePath -> IO Controller
 buildController file = do
