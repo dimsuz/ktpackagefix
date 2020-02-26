@@ -87,6 +87,13 @@ extractBindingName file = do
   resource <- extractLayoutResource file
   return ((<> "Binding") . snakeToPascal <$> resource)
 
+findChildViewIds :: Module -> Text -> IO [Text]
+findChildViewIds m layoutRes = do
+  let filename = moduleDir m </> "src" </> "main" </> "res" </> "layout" </> fromText layoutRes <.> "xml"
+  let matches = match viewIdPattern . lineToText <$> input filename
+  join <$> fold matches Fold.list
+  where viewIdPattern = has (("android:id=\"@+id/" <|> "android:id=\"@id/") *> chars1 <* char '"')
+
 buildController :: FilePath -> IO Controller
 buildController file = do
   name <- fromJust <$> extractControllerName file
