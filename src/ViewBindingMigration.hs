@@ -5,6 +5,7 @@ import Turtle hiding (fp)
 import Prelude hiding (FilePath)
 import Data.Maybe (listToMaybe, isJust, fromJust)
 import Control.Monad (filterM)
+import System.IO (hClose)
 import qualified Control.Foldl as Fold
 import qualified Data.Text as T
 
@@ -17,7 +18,6 @@ import qualified Data.Text as T
 -- * Remove viewLayoutResource, replace with binding inflate reference
 -- * Remove imports: synthetics, ".R$"
 -- * Add imports: ViewBinding, derived binding name
-
 data Module = Module
   { moduleManifest :: FilePath
   , moduleSrcMainPath :: FilePath
@@ -34,6 +34,17 @@ data Controller = Controller
   , controllerChildViewIds :: [Text]
   }
   deriving Show
+
+inplaceFilter :: Pattern () -> FilePath -> IO ()
+inplaceFilter ptrn file = liftIO $ runManaged $ do
+  here <- pwd
+  (tmpfile, handle) <- mktemp here "inplaceFilter"
+  let matches line = (not . null) (match ptrn (lineToText line))
+  let filtered = mfilter matches (input file)
+  outhandle handle filtered
+  liftIO (hClose handle)
+  copymod file tmpfile
+  mv tmpfile file
 
 extractModuleName :: FilePath -> Text
 extractModuleName = T.pack . encodeString . dirname . extractModuleDir
@@ -94,24 +105,34 @@ findChildViewIds m layoutRes = do
   join <$> fold matches Fold.list
   where viewIdPattern = has (("android:id=\"@+id/" <|> "android:id=\"@id/") *> chars1 <* char '"')
 
-buildController :: FilePath -> IO Controller
-buildController file = do
+buildController :: Module -> FilePath -> IO Controller
+buildController m file = do
   name <- fromJust <$> extractControllerName file
   bindingName <- fromJust <$> extractBindingName file
+  resource <- fromJust<$> extractLayoutResource file
+  viewIds <- findChildViewIds m resource
   return Controller
     { controllerName = name
     , controllerFilePath = file
     , controllerBindingName = bindingName
-    , controllerChildViewIds = []
+    , controllerChildViewIds = viewIds
     }
 
 findControllers :: Module -> IO [Controller]
 findControllers m = do
   files <- fold controllers Fold.list
   scopedControllers <- filterM isScopedController files
-  mapM buildController scopedControllers
+  mapM (buildController m) scopedControllers
   where
     controllers = find (ends "Controller.kt") (moduleDir m)
+
+renameControllerOldToNew :: Controller -> IO ()
+renameControllerOldToNew c = inplace renamePattern (controllerFilePath c)
+  where renamePattern = "ScopedMviControllerOld" *> pure "ScopedMviController"
+
+removeKotlinXImport :: Controller -> IO ()
+removeKotlinXImport c = inplaceFilter removePattern (controllerFilePath c)
+  where removePattern = invert (has "kotlinx.android.synthetic")
 
 refactorToViewBinding :: IO ()
 refactorToViewBinding = do
@@ -119,4 +140,6 @@ refactorToViewBinding = do
   let workDir = "../casino-android/casino-ui-profile"
   modules <- findModules (collapse workDir)
   controllers <- join <$> mapM findControllers modules
-  print controllers
+  -- print controllers
+  let runActions c = mapM_ (\action -> action c) [renameControllerOldToNew, removeKotlinXImport]
+  mapM_ runActions controllers
