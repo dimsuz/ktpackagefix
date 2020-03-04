@@ -23,7 +23,7 @@ data Module = Module
   { moduleManifest :: FilePath
   , moduleSrcMainPath :: FilePath
   , moduleDir :: FilePath
-  , modulePackage :: Maybe Text
+  , modulePackage :: Text
   , moduleName :: Text
   }
   deriving Show
@@ -33,6 +33,7 @@ data Controller = Controller
   , controllerFilePath :: FilePath
   , controllerBindingName :: Text
   , controllerChildViewIds :: [Text]
+  , controllerModule :: Module
   }
   deriving Show
 
@@ -64,7 +65,7 @@ extractPackage manifest = do
 
 buildModule :: FilePath -> IO Module
 buildModule mf = do
-  package <- extractPackage mf
+  package <- fromJust <$> extractPackage mf
   return (Module mf (extractRootPath mf) (extractModuleDir mf) package (extractModuleName mf))
 
 findModules :: FilePath -> IO [Module]
@@ -74,9 +75,9 @@ findModules dir = do
   where
     manifests = findtree (invert (has "build")) (find (ends "src/main/AndroidManifest.xml") dir)
 
-isScopedController :: FilePath -> IO Bool
-isScopedController file = not . null <$> fold lines Fold.list
-  where lines = grep (has "ScopedMviControllerOld<") (input file)
+grepFind :: Text -> FilePath -> IO Bool
+grepFind t file = not . null <$> fold lines Fold.list
+  where lines = grep (has (text t)) (input file)
 
 extractControllerName :: FilePath -> IO (Maybe Text)
 extractControllerName file = do
@@ -92,6 +93,10 @@ extractLayoutResource file = do
 
 snakeToPascal :: Text -> Text
 snakeToPascal s = T.concat (map T.toTitle parts)
+  where parts = T.splitOn "_" s
+
+snakeToCamel :: Text -> Text
+snakeToCamel s = head parts <> T.concat (map T.toTitle (drop 1 parts))
   where parts = T.splitOn "_" s
 
 extractBindingName :: FilePath -> IO (Maybe Text)
@@ -117,6 +122,7 @@ buildController m file = do
     , controllerFilePath = file
     , controllerBindingName = bindingName
     , controllerChildViewIds = viewIds
+    , controllerModule = m
     }
 
 findControllers :: Module -> IO [Controller]
@@ -126,6 +132,7 @@ findControllers m = do
   mapM (buildController m) scopedControllers
   where
     controllers = find (ends "Controller.kt") (moduleDir m)
+    isScopedController = grepFind "ScopedMviControllerOld<"
 
 renameControllerOldToNew :: Controller -> IO ()
 renameControllerOldToNew c = inplace renamePattern (controllerFilePath c)
@@ -144,6 +151,35 @@ updateConfigObject c = do
     templateParamPattern = "Config<ViewState> {" *> pure ("Config<ViewState, " <> bindingName <> "> {")
     layoutResourcePattern = "val viewLayoutResource" *> chars1 *> pure ("val inflater: ViewInflater<" <> bindingName <> "> = " <> bindingName <> "::inflate")
 
+updateInheritedClass :: Controller -> IO ()
+updateInheritedClass c = do
+  inplace classPattern (controllerFilePath c)
+  where
+    bindingName = controllerBindingName c
+    classPattern = "ScopedMviController<ViewState, " *> pure ("ScopedMviController<ViewState, " <> bindingName <> ", ")
+
+replaceViewIdsWithBindingIds :: Controller -> IO ()
+replaceViewIdsWithBindingIds c = for_ (controllerChildViewIds c) $ \viewId -> do
+  let idPattern = text viewId *> pure ("binding." <> snakeToCamel viewId)
+  inplace idPattern (controllerFilePath c)
+
+removeUnusedRImports :: Controller -> IO ()
+removeUnusedRImports c = do
+  hasRUsage <- grepFind "R." (controllerFilePath c)
+  unless hasRUsage $ inplaceFilter (invert importPattern) (controllerFilePath c)
+  where importPattern = text ("import " <> modulePackage m <> ".R")
+        m = controllerModule c
+
+insertRequiredImports :: Controller -> IO ()
+insertRequiredImports c = do
+  inplace insertPattern (controllerFilePath c)
+  where insertPattern = do
+          packageLine <- begins "package "
+          return $ packageLine <> "\n" <> bindingImport <> "\n" <> inflaterImport
+        inflaterImport = "import ru.appkode.base.ui.mvi.core.ViewInflater"
+        bindingImport = "import " <> (modulePackage m) <> ".databinding." <> controllerBindingName c
+        m = controllerModule c
+
 refactorToViewBinding :: IO ()
 refactorToViewBinding = do
   -- workDir <- pwd
@@ -153,4 +189,8 @@ refactorToViewBinding = do
   for_ controllers $ \c -> do
     renameControllerOldToNew c
     removeKotlinXImport c
+    updateInheritedClass c
     updateConfigObject c
+    replaceViewIdsWithBindingIds c
+    insertRequiredImports c
+    removeUnusedRImports c
