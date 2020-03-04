@@ -4,6 +4,7 @@ module ViewBindingMigration where
 import Turtle hiding (fp)
 import Prelude hiding (FilePath)
 import Data.Maybe (listToMaybe, isJust, fromJust)
+import Data.Foldable (for_)
 import Control.Monad (filterM)
 import System.IO (hClose)
 import qualified Control.Foldl as Fold
@@ -134,12 +135,22 @@ removeKotlinXImport :: Controller -> IO ()
 removeKotlinXImport c = inplaceFilter removePattern (controllerFilePath c)
   where removePattern = invert (has "kotlinx.android.synthetic")
 
+updateConfigObject :: Controller -> IO ()
+updateConfigObject c = do
+  inplace templateParamPattern (controllerFilePath c)
+  inplace layoutResourcePattern (controllerFilePath c)
+  where
+    bindingName = controllerBindingName c
+    templateParamPattern = "Config<ViewState> {" *> pure ("Config<ViewState, " <> bindingName <> "> {")
+    layoutResourcePattern = "val viewLayoutResource" *> chars1 *> pure ("val inflater: ViewInflater<" <> bindingName <> "> = " <> bindingName <> "::inflate")
+
 refactorToViewBinding :: IO ()
 refactorToViewBinding = do
   -- workDir <- pwd
   let workDir = "../casino-android/casino-ui-profile"
   modules <- findModules (collapse workDir)
   controllers <- join <$> mapM findControllers modules
-  -- print controllers
-  let runActions c = mapM_ (\action -> action c) [renameControllerOldToNew, removeKotlinXImport]
-  mapM_ runActions controllers
+  for_ controllers $ \c -> do
+    renameControllerOldToNew c
+    removeKotlinXImport c
+    updateConfigObject c
