@@ -5,6 +5,8 @@ import Turtle hiding (fp)
 import Prelude hiding (FilePath)
 import Data.Maybe (listToMaybe, isJust, fromJust)
 import Data.Foldable (for_)
+import Data.Ord (comparing)
+import qualified Data.List as DL
 import Control.Monad (filterM)
 import System.IO (hClose)
 import qualified Control.Foldl as Fold
@@ -12,7 +14,6 @@ import qualified Data.Text as T
 
 -- * Find viewLayoutResource, derive binding name
 -- * Gather ids from layout file and replace them with binding.id in controller file
--- * Rename ScopedMviControllerOld -> ScopedMviController
 -- * Rename import for ScopedMviController
 -- * Add binding name to ScopedMviController template params
 -- * Add binding name to Config template params
@@ -132,11 +133,9 @@ findControllers m = do
   mapM (buildController m) scopedControllers
   where
     controllers = find (ends "Controller.kt") (moduleDir m)
-    isScopedController = grepFind "ScopedMviControllerOld<"
-
-renameControllerOldToNew :: Controller -> IO ()
-renameControllerOldToNew c = inplace renamePattern (controllerFilePath c)
-  where renamePattern = "ScopedMviControllerOld" *> pure "ScopedMviController"
+    isScopedController file = if filename file == "ScopedMviController.kt"
+      then return False
+      else grepFind "ScopedMviController<" file
 
 removeKotlinXImport :: Controller -> IO ()
 removeKotlinXImport c = inplaceFilter removePattern (controllerFilePath c)
@@ -158,8 +157,11 @@ updateInheritedClass c = do
     bindingName = controllerBindingName c
     classPattern = "ScopedMviController<ViewState, " *> pure ("ScopedMviController<ViewState, " <> bindingName <> ", ")
 
+sortDescending :: [Text] -> [Text]
+sortDescending = DL.sortBy (flip $ comparing T.length)
+
 replaceViewIdsWithBindingIds :: Controller -> IO ()
-replaceViewIdsWithBindingIds c = for_ (controllerChildViewIds c) $ \viewId -> do
+replaceViewIdsWithBindingIds c = for_ (sortDescending $ controllerChildViewIds c) $ \viewId -> do
   let idPattern = text viewId *> pure ("binding." <> snakeToCamel viewId)
   inplace idPattern (controllerFilePath c)
 
@@ -182,12 +184,12 @@ insertRequiredImports c = do
 
 refactorToViewBinding :: IO ()
 refactorToViewBinding = do
-  -- workDir <- pwd
-  let workDir = "../casino-android/casino-ui-profile"
+  workDir <- pwd
   modules <- findModules (collapse workDir)
+  putStrLn $ "Found " <> show (length modules) <> " modules"
   controllers <- join <$> mapM findControllers modules
+  putStrLn $ "Found " <> show (length controllers) <> " controllers"
   for_ controllers $ \c -> do
-    renameControllerOldToNew c
     removeKotlinXImport c
     updateInheritedClass c
     updateConfigObject c
