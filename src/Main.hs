@@ -1,6 +1,6 @@
 module Main where
 
-import ViewBindingMigration
+import KtPackageMigration
 
 main :: IO ()
-main = refactorToViewBinding
+main = refactorKotlinPackages
