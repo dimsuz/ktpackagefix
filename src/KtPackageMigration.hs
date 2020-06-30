@@ -10,12 +10,15 @@ import qualified Data.Text as T
 import Turtle hiding (f, fp)
 import Prelude hiding (FilePath)
 
-data Module = Module
-  { moduleManifest :: FilePath,
-    moduleSrcMainPath :: FilePath,
-    modulePackage :: Maybe Text,
-    moduleName :: Text
-  }
+dryRun = False
+
+data Module
+  = Module
+      { moduleManifest :: FilePath,
+        moduleSrcMainPath :: FilePath,
+        modulePackage :: Maybe Text,
+        moduleName :: Text
+      }
   deriving (Show)
 
 extractModuleName :: FilePath -> Text
@@ -57,10 +60,9 @@ validateModule m = do
 
 validateKotlinPackage :: Module -> FilePath -> IO (Either FilePath ())
 validateKotlinPackage m fp = do
-  expectedPackage <- derivePackageName m fp
+  let expectedPackage = derivePackageName m fp
   filePackage <- extractPackageFromKt fp
   let isExpected = filePackage == Just expectedPackage
-  unless isExpected $ putStrLn ("expected " <> T.unpack expectedPackage <> " for " <> show filePackage)
   return $ if isExpected then Right () else Left fp
 
 convertValidationResult :: Module -> Either FilePath () -> Either Text Module
@@ -109,7 +111,10 @@ derivePackageName m fp =
           else fromMaybe relativePackageNameDraft (T.stripPrefix (basePackage <> ".") relativePackageNameDraft)
    in if T.null relativePackageName
         then basePackage
-        else return (basePackage <> "." <> relativePackageName)
+        else basePackage <> "." <> relativePackageName
+
+isAlreadyMigrated :: Module -> Bool
+isAlreadyMigrated _ = False
 
 repackageSourceFiles :: Module -> IO ()
 repackageSourceFiles m = do
@@ -144,5 +149,5 @@ refactorKotlinPackages = do
   if null packageValidationErrors
     then do
       putStrLn "\nPackage validation: OK"
-      mapM_ repackageSourceFiles validModules
+      unless dryRun $ mapM_ repackageSourceFiles (filter (not . isAlreadyMigrated) validModules)
     else printErrorList "Package errors: " packageValidationErrors
